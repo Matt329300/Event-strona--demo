@@ -10,13 +10,87 @@
 
   var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  /* --- wideo hero: zatrzymaj przy preferencji ograniczonego ruchu --- */
-  if (reduceMotion) {
-    document.querySelectorAll("video[autoplay]").forEach(function (v) {
+  /* --- wideo w tle: autoplay na mobile + łagodny fallback ---
+     Na telefonach (iOS Safari, Chrome z oszczędzaniem danych) autoplay bywa
+     blokowany do pierwszego gestu. Próbujemy odtworzyć od razu, potem po
+     pierwszym dotknięciu / scrollu. Jeśli i to się nie uda (np. tryb
+     oszczędzania energii) — usuwamy <video>, żeby nie wisiał trójkąt "play". */
+  (function initBgVideo() {
+    var v = document.querySelector(".page-bg__video");
+    if (!v) return;
+
+    if (reduceMotion) {
       v.removeAttribute("autoplay");
-      v.pause();
+      try { v.pause(); } catch (e) {}
+      return;
+    }
+
+    v.muted = true;
+    v.defaultMuted = true;
+    v.setAttribute("muted", "");
+    v.playsInline = true;
+    v.setAttribute("playsinline", "");
+    v.setAttribute("webkit-playsinline", "");
+
+    var gestureEvents = ["touchstart", "pointerdown", "click", "scroll", "keydown"];
+
+    function tryPlay() {
+      var p = v.play();
+      if (p && typeof p.then === "function") {
+        p.then(unbindGesture).catch(bindGesture);
+      }
+    }
+    function onGesture() {
+      unbindGesture();
+      var p = v.play();
+      if (p && typeof p.then === "function") {
+        p.catch(function () {
+          // po realnym geście nadal nie gra -> nie ma jak; usuń, by nie było trójkąta
+          if (v.paused && v.currentTime === 0 && v.parentNode) {
+            v.parentNode.removeChild(v);
+          }
+        });
+      }
+    }
+    function bindGesture() {
+      gestureEvents.forEach(function (ev) {
+        window.addEventListener(ev, onGesture, { once: true, passive: true });
+      });
+    }
+    function unbindGesture() {
+      gestureEvents.forEach(function (ev) {
+        window.removeEventListener(ev, onGesture);
+      });
+    }
+
+    // Źródło jako data:URI (wersja jednoplikowa) -> zamień na Blob URL: iOS
+    // znacznie stabilniej odtwarza wtedy wideo w pętli.
+    var srcEl = v.querySelector("source");
+    var rawSrc = (srcEl && srcEl.getAttribute("src")) || v.getAttribute("src") || "";
+    if (rawSrc.slice(0, 5) === "data:") {
+      try {
+        var comma = rawSrc.indexOf(",");
+        var meta = rawSrc.slice(5, comma);
+        var mime = meta.split(";")[0] || "video/mp4";
+        var bin = atob(rawSrc.slice(comma + 1));
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        var url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+        if (srcEl) v.removeChild(srcEl);
+        v.src = url;
+        v.load();
+      } catch (e) {}
+    }
+
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden && v.parentNode) v.play().catch(function () {});
     });
-  }
+
+    if (v.readyState >= 2) tryPlay();
+    else v.addEventListener("loadeddata", tryPlay, { once: true });
+    // dodatkowa próba po pełnym załadowaniu strony
+    window.addEventListener("load", tryPlay, { once: true });
+  })();
 
   /* --- rok w stopce --- */
   document.querySelectorAll("[data-year]").forEach(function (el) {
