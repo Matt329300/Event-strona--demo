@@ -1,0 +1,4 @@
+# Normalizacja końców linii — w repo zawsze LF
+* text=auto eol=lf
+
+*.mp4 binary

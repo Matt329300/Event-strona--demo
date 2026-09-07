@@ -1,0 +1,22 @@
+# Zależności
+node_modules/
+
+# Narzędzia / lokalne
+.claude/
+scratchpad/
+*.local
+
+# System
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Edytory
+.vscode/
+.idea/
+*.swp
+*~
+
+# Logi
+*.log
+npm-debug.log*
