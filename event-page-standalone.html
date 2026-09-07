@@ -876,20 +876,21 @@
     var PH_SVG = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M0 0L100 100M100 0L0 100" stroke="#ffffff" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>';
     document.querySelectorAll(".ph").forEach(function (el) { el.innerHTML = PH_SVG; });
 
-    /* --- wideo w tle: autoplay na mobile + łagodny fallback ---
-       Na telefonach autoplay bywa blokowany do pierwszego gestu. Próbujemy
-       od razu, potem po pierwszym dotknięciu / scrollu. Jeśli i to nie
-       zadziała (np. tryb oszczędzania energii) — usuwamy <video>, żeby nie
-       został widoczny trójkąt "play". */
+    /* --- wideo w tle: autoplay tam, gdzie się da; inaczej cichy fallback ---
+       Przeglądarki wbudowane (Messenger, Instagram), iOS Safari i tryb
+       oszczędzania energii często blokują autoodtwarzanie i pokazują natrętny
+       przycisk „play". Strategia: spróbuj od razu i po pierwszym geście; jeśli
+       w ~1,5 s nie ruszy — usuń <video> całkowicie (w tle zostaje czerń). */
     (function initBgVideo() {
       var v = document.querySelector(".page-bg__video");
       if (!v) return;
 
-      if (reduceMotion) {
-        v.removeAttribute("autoplay");
-        try { v.pause(); } catch (e) {}
-        return;
+      function dropVideo() {
+        if (v && v.parentNode) v.parentNode.removeChild(v);
+        v = null;
       }
+
+      if (reduceMotion) { dropVideo(); return; }
 
       v.muted = true;
       v.defaultMuted = true;
@@ -897,30 +898,6 @@
       v.playsInline = true;
       v.setAttribute("playsinline", "");
       v.setAttribute("webkit-playsinline", "");
-
-      var gestureEvents = ["touchstart", "pointerdown", "click", "scroll", "keydown"];
-
-      function tryPlay() {
-        var p = v.play();
-        if (p && typeof p.then === "function") p.then(unbindGesture).catch(bindGesture);
-      }
-      function onGesture() {
-        unbindGesture();
-        var p = v.play();
-        if (p && typeof p.then === "function") {
-          p.catch(function () {
-            if (v.paused && v.currentTime === 0 && v.parentNode) v.parentNode.removeChild(v);
-          });
-        }
-      }
-      function bindGesture() {
-        gestureEvents.forEach(function (ev) {
-          window.addEventListener(ev, onGesture, { once: true, passive: true });
-        });
-      }
-      function unbindGesture() {
-        gestureEvents.forEach(function (ev) { window.removeEventListener(ev, onGesture); });
-      }
 
       // data:URI -> Blob URL: iOS znacznie stabilniej odtwarza wideo w pętli
       var srcEl = v.querySelector("source");
@@ -932,20 +909,34 @@
           var bin = atob(rawSrc.slice(comma + 1));
           var bytes = new Uint8Array(bin.length);
           for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-          var url = URL.createObjectURL(new Blob([bytes], { type: mime }));
           if (srcEl) v.removeChild(srcEl);
-          v.src = url;
+          v.src = URL.createObjectURL(new Blob([bytes], { type: mime }));
           v.load();
         } catch (e) {}
       }
 
-      document.addEventListener("visibilitychange", function () {
-        if (!document.hidden && v.parentNode) v.play().catch(function () {});
-      });
+      var settled = false;
+      function keep() { settled = true; }
+      function attempt(dropOnFail) {
+        if (settled || !v) return;
+        var p = v.play();
+        if (p && typeof p.then === "function") {
+          p.then(keep).catch(function () { if (dropOnFail && !settled) dropVideo(); });
+        }
+      }
 
-      if (v.readyState >= 2) tryPlay();
-      else v.addEventListener("loadeddata", tryPlay, { once: true });
-      window.addEventListener("load", tryPlay, { once: true });
+      attempt(false);
+      ["touchstart", "pointerdown", "click"].forEach(function (ev) {
+        window.addEventListener(ev, function h() {
+          window.removeEventListener(ev, h);
+          attempt(true);
+        }, { passive: true });
+      });
+      setTimeout(function () { if (!settled && v && v.paused) dropVideo(); }, 1500);
+
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden && v) v.play().then(keep).catch(function () {});
+      });
     })();
 
     /* --- rok w stopce --- */

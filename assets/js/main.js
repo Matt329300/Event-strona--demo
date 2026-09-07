@@ -10,20 +10,21 @@
 
   var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  /* --- wideo w tle: autoplay na mobile + łagodny fallback ---
-     Na telefonach (iOS Safari, Chrome z oszczędzaniem danych) autoplay bywa
-     blokowany do pierwszego gestu. Próbujemy odtworzyć od razu, potem po
-     pierwszym dotknięciu / scrollu. Jeśli i to się nie uda (np. tryb
-     oszczędzania energii) — usuwamy <video>, żeby nie wisiał trójkąt "play". */
+  /* --- wideo w tle: autoplay tam, gdzie się da; inaczej cichy fallback ---
+     Przeglądarki wbudowane (Messenger, Instagram, Facebook), iOS Safari i tryb
+     oszczędzania energii często blokują autoodtwarzanie i pokazują wtedy natrętny
+     przycisk „play". Strategia: spróbuj odtworzyć od razu i po pierwszym geście;
+     jeśli w ~1,5 s nie ruszy — usuń <video> całkowicie (w tle zostaje czerń). */
   (function initBgVideo() {
     var v = document.querySelector(".page-bg__video");
     if (!v) return;
 
-    if (reduceMotion) {
-      v.removeAttribute("autoplay");
-      try { v.pause(); } catch (e) {}
-      return;
+    function dropVideo() {
+      if (v && v.parentNode) v.parentNode.removeChild(v);
+      v = null;
     }
+
+    if (reduceMotion) { dropVideo(); return; }
 
     v.muted = true;
     v.defaultMuted = true;
@@ -32,64 +33,45 @@
     v.setAttribute("playsinline", "");
     v.setAttribute("webkit-playsinline", "");
 
-    var gestureEvents = ["touchstart", "pointerdown", "click", "scroll", "keydown"];
-
-    function tryPlay() {
-      var p = v.play();
-      if (p && typeof p.then === "function") {
-        p.then(unbindGesture).catch(bindGesture);
-      }
-    }
-    function onGesture() {
-      unbindGesture();
-      var p = v.play();
-      if (p && typeof p.then === "function") {
-        p.catch(function () {
-          // po realnym geście nadal nie gra -> nie ma jak; usuń, by nie było trójkąta
-          if (v.paused && v.currentTime === 0 && v.parentNode) {
-            v.parentNode.removeChild(v);
-          }
-        });
-      }
-    }
-    function bindGesture() {
-      gestureEvents.forEach(function (ev) {
-        window.addEventListener(ev, onGesture, { once: true, passive: true });
-      });
-    }
-    function unbindGesture() {
-      gestureEvents.forEach(function (ev) {
-        window.removeEventListener(ev, onGesture);
-      });
-    }
-
-    // Źródło jako data:URI (wersja jednoplikowa) -> zamień na Blob URL: iOS
-    // znacznie stabilniej odtwarza wtedy wideo w pętli.
+    // Źródło jako data:URI (wersja jednoplikowa) -> Blob URL: iOS stabilniej.
     var srcEl = v.querySelector("source");
     var rawSrc = (srcEl && srcEl.getAttribute("src")) || v.getAttribute("src") || "";
     if (rawSrc.slice(0, 5) === "data:") {
       try {
         var comma = rawSrc.indexOf(",");
-        var meta = rawSrc.slice(5, comma);
-        var mime = meta.split(";")[0] || "video/mp4";
+        var mime = rawSrc.slice(5, comma).split(";")[0] || "video/mp4";
         var bin = atob(rawSrc.slice(comma + 1));
         var bytes = new Uint8Array(bin.length);
         for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        var url = URL.createObjectURL(new Blob([bytes], { type: mime }));
         if (srcEl) v.removeChild(srcEl);
-        v.src = url;
+        v.src = URL.createObjectURL(new Blob([bytes], { type: mime }));
         v.load();
       } catch (e) {}
     }
 
-    document.addEventListener("visibilitychange", function () {
-      if (!document.hidden && v.parentNode) v.play().catch(function () {});
-    });
+    var settled = false;
+    function keep() { settled = true; }
+    function attempt(dropOnFail) {
+      if (settled || !v) return;
+      var p = v.play();
+      if (p && typeof p.then === "function") {
+        p.then(keep).catch(function () { if (dropOnFail && !settled) dropVideo(); });
+      }
+    }
 
-    if (v.readyState >= 2) tryPlay();
-    else v.addEventListener("loadeddata", tryPlay, { once: true });
-    // dodatkowa próba po pełnym załadowaniu strony
-    window.addEventListener("load", tryPlay, { once: true });
+    attempt(false);
+    ["touchstart", "pointerdown", "click"].forEach(function (ev) {
+      window.addEventListener(ev, function h() {
+        window.removeEventListener(ev, h);
+        attempt(true);
+      }, { passive: true });
+    });
+    // bezpiecznik: nie ruszyło samo i nie było gestu -> sprzątamy trójkąt
+    setTimeout(function () { if (!settled && v && v.paused) dropVideo(); }, 1500);
+
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden && v) v.play().then(keep).catch(function () {});
+    });
   })();
 
   /* --- rok w stopce --- */
